@@ -14,6 +14,22 @@ macro_rules! define_from {
     };
 }
 
+macro_rules! define_from_tupl {
+    ($from:ty, $to:ty, $handle_idx:tt) => {
+        impl From<$from> for $to {
+            fn from(value: $from) -> Self {
+                value.$handle_idx
+            }
+        }
+
+        impl From<&$from> for $to {
+            fn from(value: &$from) -> Self {
+                value.$handle_idx
+            }
+        }
+    };
+}
+
 mod command;
 mod device;
 mod gpu_resource;

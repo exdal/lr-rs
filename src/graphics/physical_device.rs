@@ -1,6 +1,6 @@
 use ash::{ext, khr, vk, Entry};
 use core::ffi;
-use std::{error::Error, fmt::Debug};
+use std::error::Error;
 use winit::{
     raw_window_handle::{HasDisplayHandle, HasWindowHandle},
     window,
@@ -62,7 +62,7 @@ pub struct PhysicalDevice {
 }
 
 impl PhysicalDevice {
-    pub fn new() -> Result<Self, Box<dyn Error>> {
+    pub fn new() -> Result<Self, vk::Result> {
         let app_name = unsafe { ffi::CStr::from_bytes_with_nul_unchecked(b"Lorr\0") };
         let app_info = vk::ApplicationInfo::default()
             .application_name(app_name)
@@ -144,7 +144,7 @@ impl PhysicalDevice {
         })
     }
 
-    pub fn create_device(&self) -> Result<ash::Device, Box<dyn Error>> {
+    pub fn create_device(&self) -> Result<ash::Device, vk::Result> {
         let queue_priorities = [1.0];
         let mut queue_create_infos = Vec::new();
         for queue_family_index in self.queue_type_indices {

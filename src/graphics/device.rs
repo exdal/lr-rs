@@ -1,12 +1,21 @@
 use ash::{khr, vk};
 use gpu_allocator::vulkan;
-use std::error::Error;
 use winit::window;
 
 use super::{
-    Buffer, CommandAllocator, CommandList, CommandQueue, CommandType, Image, ImageView,
-    PhysicalDevice, Sampler, Semaphore, SwapChain,
+    Buffer, CommandAllocator, CommandList, CommandQueue, CommandType, DescriptorPool,
+    DescriptorSet, DescriptorSetLayout, Image, ImageView, PhysicalDevice, Sampler, Semaphore,
+    SwapChain,
 };
+
+#[repr(u32)]
+enum Descriptor {
+    Samplers(vk::DescriptorType, u32) = 0,
+    Images(vk::DescriptorType, u32) = 1,
+    StorageImages(vk::DescriptorType, u32) = 2,
+    StorageBuffer(vk::DescriptorType, u32) = 3,
+    BufferDeviceaddress(vk::DescriptorType, u32) = 4,
+}
 
 pub struct Device {
     pub physical_device: PhysicalDevice,
@@ -17,10 +26,15 @@ pub struct Device {
     pub handle: ash::Device,
     pub frame_sema: Semaphore,
     pub frame_count: u32,
+
+    // BINDLESS DESCRIPTOR SET //
+    pub descriptor_pool: DescriptorPool,
+    pub descriptor_set_layout: DescriptorSetLayout,
+    pub descriptor_set: DescriptorSet,
 }
 
 impl Device {
-    pub fn new(frame_count: u32) -> Result<Self, Box<dyn Error>> {
+    pub fn new(frame_count: u32) -> Result<Self, vk::Result> {
         let physical_device = PhysicalDevice::new()?;
         let handle = physical_device.create_device()?;
         let swapchain_loader = khr::swapchain::Device::new(&physical_device.instance, &handle);
@@ -50,6 +64,9 @@ impl Device {
             handle,
             frame_sema: Default::default(),
             frame_count,
+            descriptor_pool: DescriptorPool::default(),
+            descriptor_set_layout: DescriptorSetLayout::default(),
+            descriptor_set: DescriptorSet::default(),
         };
 
         // Preparation
@@ -80,6 +97,84 @@ impl Device {
                 handle: native_queues[i],
             }
         });
+
+        // TODO: Replace this amount with ResourcePool size in the future
+        let fixed_descriptor_count = 1024_u32;
+
+        let descriptor_set_layout_infos = [
+            Descriptor::Samplers(vk::DescriptorType::SAMPLER, fixed_descriptor_count),
+            Descriptor::Images(vk::DescriptorType::SAMPLED_IMAGE, fixed_descriptor_count),
+            Descriptor::StorageImages(vk::DescriptorType::STORAGE_IMAGE, fixed_descriptor_count),
+            Descriptor::StorageBuffer(vk::DescriptorType::STORAGE_BUFFER, fixed_descriptor_count),
+            Descriptor::BufferDeviceaddress(vk::DescriptorType::STORAGE_BUFFER, 1_u32),
+        ];
+
+        let mut descriptor_pool_sizes = Vec::new();
+        let mut descriptor_bindings = Vec::new();
+        let mut descriptor_binding_flags = Vec::new();
+
+        descriptor_set_layout_infos
+            .iter()
+            .map(|descriptor| match descriptor {
+                Descriptor::Samplers(descriptor_type, descriptor_count)
+                | Descriptor::Images(descriptor_type, descriptor_count)
+                | Descriptor::StorageImages(descriptor_type, descriptor_count)
+                | Descriptor::StorageBuffer(descriptor_type, descriptor_count)
+                | Descriptor::BufferDeviceaddress(descriptor_type, descriptor_count) => {
+                    (*descriptor_type, *descriptor_count)
+                }
+            })
+            .enumerate()
+            .for_each(|(binding, (descriptor_type, descriptor_count))| {
+                let pool_size = vk::DescriptorPoolSize::default()
+                    .ty(descriptor_type)
+                    .descriptor_count(descriptor_count);
+                let binding_info = vk::DescriptorSetLayoutBinding::default()
+                    .descriptor_type(descriptor_type)
+                    .binding(binding as u32);
+                let binding_flags = vk::DescriptorBindingFlags::UPDATE_AFTER_BIND
+                    | vk::DescriptorBindingFlags::PARTIALLY_BOUND;
+
+                descriptor_pool_sizes.push(pool_size);
+                descriptor_bindings.push(binding_info);
+                descriptor_binding_flags.push(binding_flags);
+            });
+
+        let mut descriptor_binding_flag_info =
+            vk::DescriptorSetLayoutBindingFlagsCreateInfo::default()
+                .binding_flags(&descriptor_binding_flags);
+        let descriptor_set_layout_info = vk::DescriptorSetLayoutCreateInfo::default()
+            .flags(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL)
+            .bindings(&descriptor_bindings)
+            .push_next(&mut descriptor_binding_flag_info);
+        result.descriptor_set_layout.0 = unsafe {
+            result
+                .handle
+                .create_descriptor_set_layout(&descriptor_set_layout_info, None)
+                .expect("Failed to create bindless descriptor set")
+        };
+
+        let descriptor_pool_info = vk::DescriptorPoolCreateInfo::default()
+            .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
+            .pool_sizes(&descriptor_pool_sizes)
+            .max_sets(1);
+        result.descriptor_pool.0 = unsafe {
+            result
+                .handle
+                .create_descriptor_pool(&descriptor_pool_info, None)
+                .expect("Failed to create bindless descriptor pool")
+        };
+
+        let descriptor_layouts = [result.descriptor_set_layout.0];
+        let descriptor_set_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(result.descriptor_pool.0)
+            .set_layouts(&descriptor_layouts);
+        result.descriptor_set.0 = unsafe {
+            result
+                .handle
+                .allocate_descriptor_sets(&descriptor_set_info)
+                .expect("Failed to allocate bindless descriptor set")[0]
+        };
 
         Ok(result)
     }
